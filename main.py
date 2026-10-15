@@ -6,6 +6,11 @@ from pynput import keyboard
 # мышку в угол чтобы экстренно остановить
 pyautogui.FAILSAFE = True
 
+class ClickerSignals(QtCore.QObject):
+    toggle_signal = QtCore.pyqtSignal()
+    save_signal = QtCore.pyqtSignal()
+    mode_signal = QtCore.pyqtSignal()
+
 class AutoClickerApp(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -19,18 +24,28 @@ class AutoClickerApp(QtWidgets.QMainWindow):
             error_box.exec()
             sys.exit(1)
 
-
         self.is_clicking = False
         self.current_index = 0
         self.max_points = 3
         self.row_count = 0
         self.interval = 0.2
 
+        # по умолчанию
+        self.start_hotkey = keyboard.Key.ctrl_l
+        self.save_hotkey = keyboard.Key.alt_l
+        self.mode_hotkey = keyboard.Key.shift
+        self.capturing_target = None  # 'start', 'save', or 'mode'
+
+        self.signals = ClickerSignals()
+        self.signals.toggle_signal.connect(self.toggle_clicking)
+        self.signals.save_signal.connect(self.save_current_position)
+        self.signals.mode_signal.connect(self.toggle_click_mode)
+
         self.tableWidget.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
 
-        if self.intervalLineEdit:
+        if hasattr(self, 'intervalLineEdit') and self.intervalLineEdit:
             self.intervalLineEdit.setText(str(self.interval))
-        if self.maxLenLineEdit:
+        if hasattr(self, 'maxLenLineEdit') and self.maxLenLineEdit:
             self.maxLenLineEdit.setText(str(self.max_points))
 
         if hasattr(self, 'radioButton1'):
@@ -39,6 +54,7 @@ class AutoClickerApp(QtWidgets.QMainWindow):
         self.click_timer = QtCore.QTimer(self)
         self.click_timer.timeout.connect(self.perform_click)
 
+        # подключения
         if hasattr(self, 'start'):
             self.start.clicked.connect(self.toggle_clicking)
         if hasattr(self, 'saveCoords'):
@@ -50,10 +66,30 @@ class AutoClickerApp(QtWidgets.QMainWindow):
         if hasattr(self, 'submit'):
             self.submit.clicked.connect(self.apply_settings)
 
+        if hasattr(self, 'startKey'):
+            self.startKey.clicked.connect(lambda: self.start_capturing_hotkey('start'))
+        if hasattr(self, 'saveCoordsKey'):
+            self.saveCoordsKey.clicked.connect(lambda: self.start_capturing_hotkey('save'))
+        if hasattr(self, 'modeKey'):
+            self.modeKey.clicked.connect(lambda: self.start_capturing_hotkey('mode'))
+
         self.keyboard_listener = keyboard.Listener(on_press=self.on_key_press)
         self.keyboard_listener.start()
 
-        self.update_status("Готов к работе. Нажмите Старт или Shift+S для сохранения.")
+        self.update_status("Готов к работе. Настройте горячие клавиши или нажмите Старт.")
+
+    def start_capturing_hotkey(self, target):
+        self.capturing_target = target
+        targets_ru = {'start': 'старта', 'save': 'сохранения позиции', 'mode': 'режима'}
+        self.update_status(f"Нажмите новую клавишу для {targets_ru.get(target, target)}...")
+
+    def toggle_click_mode(self):
+        if hasattr(self, 'radioButton1') and hasattr(self, 'radioButton2'):
+            if self.radioButton1.isChecked():
+                self.radioButton2.setChecked(True)
+            else:
+                self.radioButton1.setChecked(True)
+            self.update_status("Режим кликов переключен горячей клавишей.")
 
     def update_status(self, text):
         if hasattr(self, 'status'):
@@ -133,11 +169,11 @@ class AutoClickerApp(QtWidgets.QMainWindow):
 
     def apply_settings(self):
         try:
-            if self.intervalLineEdit:
+            if hasattr(self, 'intervalLineEdit') and self.intervalLineEdit:
                 val = float(self.intervalLineEdit.text())
                 if val >= 0:
                     self.interval = val
-            if self.maxLenLineEdit:
+            if hasattr(self, 'maxLenLineEdit') and self.maxLenLineEdit:
                 val = int(self.maxLenLineEdit.text())
                 if val > 0:
                     self.max_points = val
@@ -147,15 +183,32 @@ class AutoClickerApp(QtWidgets.QMainWindow):
 
     def on_key_press(self, key):
         try:
-            if key == keyboard.Key.ctrl or key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
-                self.toggle_clicking()
-            if key == keyboard.Key.alt or key == keyboard.Key.alt_l or key == keyboard.Key.alt_r:
-                self.save_current_position()
+            if self.capturing_target:
+                text = str(key).split('.')[-1]
+                if self.capturing_target == 'start':
+                    self.start_hotkey = key
+                    self.startKey.setText(text)
+                    self.update_status(f"Горячая клавиша старта изменена на: {text}")
+                elif self.capturing_target == 'save':
+                    self.save_hotkey = key
+                    self.saveCoordsKey.setText(text)
+                    self.update_status(f"Горячая клавиша сохранения изменена на: {text}")
+                elif self.capturing_target == 'mode':
+                    self.mode_hotkey = key
+                    self.modeKey.setText(text)
+                    self.update_status(f"Горячая клавиша режима изменена на: {text}")
+                self.capturing_target = None
+                return
+
+            if key == self.start_hotkey:
+                self.signals.toggle_signal.emit()
+            elif key == self.save_hotkey:
+                self.signals.save_signal.emit()
+            elif hasattr(self, 'mode_hotkey') and (key == self.mode_hotkey or (isinstance(key, keyboard.KeyCode) and key.char == self.mode_hotkey)):
+                self.signals.mode_signal.emit()
+
         except Exception as e:
             self.update_status(str(e))
-
-    def handle_global_save(self):
-        QtCore.QMetaObject.invokeMethod(self, "save_current_position", QtCore.Qt.ConnectionType.QueuedConnection)
 
     def closeEvent(self, event):
         try:
@@ -163,7 +216,6 @@ class AutoClickerApp(QtWidgets.QMainWindow):
         except Exception:
             pass
         event.accept()
-
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
